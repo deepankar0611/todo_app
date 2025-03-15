@@ -2,7 +2,7 @@ import SwiftUI
 import FirebaseCore
 import FirebaseFirestore
 
-// Firebase configuration in your AppDelegate
+// Firebase configuration in your AppDelegate (unchanged)
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
@@ -11,13 +11,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
-// Task Model
+// Task Model (unchanged)
 struct Task: Identifiable, Equatable, Codable {
     var id: String
     var title: String
     var description: String
     var isCompleted: Bool
-    var priorityColorName: String // Store color as string for Firestore compatibility
+    var priorityColorName: String
     
     var priorityColor: Color {
         switch priorityColorName {
@@ -35,7 +35,6 @@ struct Task: Identifiable, Equatable, Codable {
         self.description = description
         self.isCompleted = isCompleted
         
-        // Convert Color to string
         if priorityColor == Color.red {
             self.priorityColorName = "red"
         } else if priorityColor == Color.orange {
@@ -47,7 +46,6 @@ struct Task: Identifiable, Equatable, Codable {
         }
     }
     
-    // Create from Firestore document
     init?(document: DocumentSnapshot) {
         guard let data = document.data(),
               let title = data["title"] as? String,
@@ -64,7 +62,6 @@ struct Task: Identifiable, Equatable, Codable {
         self.priorityColorName = priorityColorName
     }
     
-    // Convert to dictionary for Firestore
     func toDictionary() -> [String: Any] {
         return [
             "title": title,
@@ -79,7 +76,7 @@ struct Task: Identifiable, Equatable, Codable {
     }
 }
 
-// Observable Task Store with Firebase integration
+// Observable Task Store with Firebase integration (unchanged)
 class TaskStore: ObservableObject {
     @Published var tasks: [Task] = []
     @Published var isLoading: Bool = false
@@ -93,7 +90,6 @@ class TaskStore: ObservableObject {
     }
     
     deinit {
-        // Remove listener when store is deallocated
         listenerRegistration?.remove()
     }
     
@@ -101,7 +97,6 @@ class TaskStore: ObservableObject {
         isLoading = true
         errorMessage = nil
         
-        // Set up a listener for real-time updates
         listenerRegistration = db.collection("tasks")
             .addSnapshotListener { [weak self] querySnapshot, error in
                 guard let self = self else { return }
@@ -118,10 +113,7 @@ class TaskStore: ObservableObject {
                     return
                 }
                 
-                self.tasks = documents.compactMap { document in
-                    return Task(document: document)
-                }
-                
+                self.tasks = documents.compactMap { Task(document: $0) }
                 self.isLoading = false
             }
     }
@@ -140,17 +132,23 @@ class TaskStore: ObservableObject {
         }
     }
     
+    func updateTask(_ task: Task) {
+        isLoading = true
+        errorMessage = nil
+        
+        db.collection("tasks").document(task.id).updateData(task.toDictionary()) { [weak self] error in
+            guard let self = self else { return }
+            self.isLoading = false
+            
+            if let error = error {
+                self.errorMessage = "Failed to update task: \(error.localizedDescription)"
+            }
+        }
+    }
+    
     func toggleTask(_ id: String) {
         if let index = tasks.firstIndex(where: { $0.id == id }) {
             let task = tasks[index]
-            _ = Task(
-                id: task.id,
-                title: task.title,
-                description: task.description,
-                isCompleted: !task.isCompleted,
-                priorityColor: task.priorityColor
-            )
-            
             db.collection("tasks").document(id).updateData([
                 "isCompleted": !task.isCompleted
             ]) { [weak self] error in
@@ -170,27 +168,24 @@ class TaskStore: ObservableObject {
     }
     
     func deleteTasks(at offsets: IndexSet) {
-        // Get the task IDs to delete
         let tasksToDelete = offsets.map { tasks[$0] }
-        
-        // Delete each task from Firestore
         for task in tasksToDelete {
             deleteTask(task.id)
         }
     }
     
     func moveTasks(from source: IndexSet, to destination: Int) {
-        // Note: For simplicity, this implementation doesn't update order in Firestore
-        // You would need to add an 'order' field to your tasks and update it
         tasks.move(fromOffsets: source, toOffset: destination)
     }
 }
 
-// Main Todo View
+// Main Todo View (Updated)
 struct TodoView: View {
     @StateObject private var taskStore = TaskStore()
     @State private var isEditing = false
     @State private var showingAddTask = false
+    @State private var showingEditTask = false
+    @State private var taskToEdit: Task?  // Optional task to edit
 
     var body: some View {
         NavigationStack {
@@ -199,7 +194,6 @@ struct TodoView: View {
                     .edgesIgnoringSafeArea(.all)
 
                 VStack(spacing: 0) {
-                    // Header
                     HStack {
                         Text("< Back")
                             .foregroundColor(.blue)
@@ -219,7 +213,6 @@ struct TodoView: View {
                         .padding(.top, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    // Task List
                     if taskStore.isLoading && taskStore.tasks.isEmpty {
                         ProgressView("Loading tasks...")
                             .padding()
@@ -228,8 +221,15 @@ struct TodoView: View {
                         List {
                             ForEach(taskStore.tasks) { task in
                                 TaskRow(task: task,
-                                       toggleTask: { taskStore.toggleTask(task.id) },
-                                       deleteTask: { taskStore.deleteTask(task.id) })
+                                        toggleTask: { taskStore.toggleTask(task.id) },
+                                        editTask: {
+                                            print("Setting taskToEdit: \(task.title)")  // Debug
+                                            taskToEdit = task
+                                            DispatchQueue.main.async {
+                                                showingEditTask = true  // Ensure state update
+                                            }
+                                        },
+                                        deleteTask: { taskStore.deleteTask(task.id) })
                                     .listRowBackground(Color.white)
                                     .listRowSeparator(.hidden)
                                     .padding(.vertical, 4)
@@ -249,7 +249,6 @@ struct TodoView: View {
                         )
                     }
                     
-                    // Error message
                     if let errorMessage = taskStore.errorMessage {
                         Text(errorMessage)
                             .foregroundColor(.red)
@@ -266,7 +265,6 @@ struct TodoView: View {
                     }
                 }
 
-                // Floating "+" Button
                 VStack {
                     Spacer()
                     HStack {
@@ -292,25 +290,34 @@ struct TodoView: View {
             .sheet(isPresented: $showingAddTask) {
                 AddTaskView(taskStore: taskStore, showingAddTask: $showingAddTask)
             }
+            // Simplified sheet with item binding
+            .sheet(item: Binding<Task?>(
+                get: { taskToEdit },
+                set: { taskToEdit = $0 }
+            )) { task in
+                EditTaskView(taskStore: taskStore, task: task, showingEditTask: $showingEditTask)
+                    .onAppear {
+                        print("EditTaskView appeared for: \(task.title)")  // Debug
+                    }
+            }
         }
     }
 }
 
-// Custom Task Row
+// Custom Task Row (unchanged)
 struct TaskRow: View {
     let task: Task
     let toggleTask: () -> Void
+    let editTask: () -> Void
     let deleteTask: () -> Void
 
     var body: some View {
         HStack {
-            // Priority Dot
             Circle()
                 .fill(task.priorityColor)
                 .frame(width: 10, height: 10)
                 .padding(.trailing, 8)
 
-            // Completion Toggle
             Button(action: toggleTask) {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(task.isCompleted ? .green : .gray)
@@ -318,7 +325,6 @@ struct TaskRow: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            // Task Details
             VStack(alignment: .leading, spacing: 4) {
                 Text(task.title)
                     .foregroundColor(.primary)
@@ -332,7 +338,14 @@ struct TaskRow: View {
 
             Spacer()
 
-            // Delete Button
+            Button(action: editTask) {
+                Image(systemName: "pencil")
+                    .foregroundColor(.blue)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.trailing, 8)
+
             Button(action: deleteTask) {
                 Image(systemName: "trash")
                     .foregroundColor(.red)
@@ -346,7 +359,7 @@ struct TaskRow: View {
     }
 }
 
-// Add Task View
+// Add Task View (unchanged)
 struct AddTaskView: View {
     @ObservedObject var taskStore: TaskStore
     @Binding var showingAddTask: Bool
@@ -400,7 +413,70 @@ struct AddTaskView: View {
     }
 }
 
-// App Entry Point with FirebaseApp configuration
+// Edit Task View (unchanged)
+struct EditTaskView: View {
+    @ObservedObject var taskStore: TaskStore
+    let task: Task
+    @Binding var showingEditTask: Bool
+    @State private var title: String
+    @State private var description: String
+    @State private var priority: Color
+    @Environment(\.dismiss) var dismiss
+
+    init(taskStore: TaskStore, task: Task, showingEditTask: Binding<Bool>) {
+        self.taskStore = taskStore
+        self.task = task
+        self._showingEditTask = showingEditTask
+        self._title = State(initialValue: task.title)
+        self._description = State(initialValue: task.description)
+        self._priority = State(initialValue: task.priorityColor)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Task Details")) {
+                    TextField("Title", text: $title)
+                        .textFieldStyle(PlainTextFieldStyle())
+                    TextField("Description", text: $description)
+                        .textFieldStyle(PlainTextFieldStyle())
+                    Picker("Priority", selection: $priority) {
+                        Text("Low").tag(Color.green)
+                        Text("Medium").tag(Color.orange)
+                        Text("High").tag(Color.red)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                }
+            }
+            .navigationTitle("Edit Task")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.red)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        if !title.trimmingCharacters(in: .whitespaces).isEmpty {
+                            let updatedTask = Task(
+                                id: task.id,
+                                title: title,
+                                description: description.isEmpty ? "No description" : description,
+                                isCompleted: task.isCompleted,
+                                priorityColor: priority
+                            )
+                            taskStore.updateTask(updatedTask)
+                            dismiss()
+                        }
+                    }
+                    .foregroundColor(.blue)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
 
 #Preview {
     TodoView()
